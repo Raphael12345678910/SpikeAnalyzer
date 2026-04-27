@@ -1,3 +1,2 @@
-# SpikeAnalyzer
-# SpikeAnalyzer
-# SpikeAnalyzer
+# Spike analyzer
+

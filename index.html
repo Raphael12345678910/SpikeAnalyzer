@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpikeCheck</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #0b1020;
+      --panel: #131a2e;
+      --panel-2: #0f172a;
+      --border: #27324b;
+      --text: #e5ecff;
+      --muted: #9fb0d0;
+      --accent: #4f8cff;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: linear-gradient(180deg, #08101f 0%, #0b1020 100%);
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }
+
+    .hero {
+      margin-bottom: 18px;
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 40px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      max-width: 900px;
+    }
+
+    .card {
+      background: rgba(19, 26, 46, 0.95);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.22);
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      margin: 0 0 12px;
+      font-size: 22px;
+    }
+
+    .step-badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: bold;
+      color: #7dd3fc;
+      background: rgba(79, 140, 255, 0.12);
+      border: 1px solid rgba(79, 140, 255, 0.35);
+      padding: 5px 9px;
+      border-radius: 999px;
+      margin-bottom: 10px;
+    }
+
+    .top-grid {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .video-shell {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #000;
+      border: 1px solid var(--border);
+    }
+
+    #video,
+    #overlayCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #video {
+      object-fit: contain;
+      background: #000;
+    }
+
+    #overlayCanvas {
+      pointer-events: none;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-weight: bold;
+      cursor: pointer;
+      background: var(--accent);
+      color: white;
+    }
+
+    button.secondary {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font-size: 14px;
+    }
+
+    #videoInput {
+      margin-top: 12px;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 90px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .field label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .full {
+      grid-column: 1 / -1;
+    }
+
+    .results-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .metric-value {
+      font-size: 22px;
+      font-weight: bold;
+      line-height: 1.25;
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .big-text-box {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 120px;
+      white-space: pre-line;
+      line-height: 1.5;
+    }
+
+    .ai-box {
+      min-height: 220px;
+    }
+
+    .hint {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 920px) {
+      .top-grid,
+      .form-grid,
+      .results-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .wide,
+      .full {
+        grid-column: auto;
+      }
+
+      .hero h1 {
+        font-size: 32px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>SpikeCheck</h1>
+      <p>
+        Upload a side-view clip, run analysis, then ask the AI coach to interpret the numbers.
+        Standing reach and net height are optional.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="step-badge">STEP 1</div>
+      <h2 class="section-title">Upload and preview your clip</h2>
+
+      <div class="top-grid">
+        <div>
+          <div class="video-shell">
+            <video id="video" controls muted playsinline></video>
+            <canvas id="overlayCanvas"></canvas>
+          </div>
+
+          <input type="file" id="videoInput" accept="video/*" />
+
+          <div class="button-row">
+            <button id="analyzeBtn">Analyze Video</button>
+            <button id="resetBtn" class="secondary">Reset</button>
+          </div>
+
+          <div class="hint">
+            Best results: side view, full body visible, stable camera, decent lighting.
+          </div>
+        </div>
+
+        <div>
+          <div class="step-badge">STEP 2</div>
+          <h2 class="section-title">Optional player info</h2>
+
+          <div class="form-grid">
+            <div class="field">
+              <label for="hittingHand">Hitting hand</label>
+              <select id="hittingHand">
+                <option value="right">Right-handed</option>
+                <option value="left">Left-handed</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="cameraAngle">Camera angle</label>
+              <select id="cameraAngle">
+                <option value="side">Side view</option>
+                <option value="diagonal">Slight diagonal</option>
+                <option value="front">Front view</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="repType">Rep type</label>
+              <select id="repType">
+                <option value="full">Full approach hit</option>
+                <option value="controlled">Controlled rep</option>
+                <option value="standing">Standing hit</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="standingReach">Standing reach (inches, optional)</label>
+              <input id="standingReach" type="number" placeholder="e.g. 94" />
+            </div>
+
+            <div class="field">
+              <label for="netHeight">Net height (inches, optional)</label>
+              <input id="netHeight" type="number" placeholder="e.g. 96" />
+            </div>
+
+            <div class="field full">
+              <label for="userNotes">What feels off? (optional)</label>
+              <textarea id="userNotes" placeholder="Example: I feel like I contact low or my arm collapses."></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="step-badge">STEP 3</div>
+      <h2 class="section-title">Results</h2>
+
+      <div class="results-grid">
+        <div class="metric">
+          <div class="metric-label">Elbow angle at likely contact</div>
+          <div class="metric-value" id="angleValue">--</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-label">Arm extension score</div>
+          <div class="metric-value" id="extensionValue">--</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-label">Reach efficiency score</div>
+          <div class="metric-value" id="reachEfficiencyValue">--</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-label">Estimated contact reach</div>
+          <div class="metric-value" id="contactReachValue">Disabled for now</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-label">Estimated gain above standing reach</div>
+          <div class="metric-value" id="gainValue">Disabled for now</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-label">Estimated margin above net</div>
+          <div class="metric-value" id="netMarginValue">Disabled for now</div>
+        </div>
+
+        <div class="metric wide">
+          <div class="metric-label">System notes</div>
+          <div class="big-text-box" id="systemOutput">Model loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="step-badge">STEP 4</div>
+      <h2 class="section-title">AI Coach</h2>
+
+      <div class="button-row">
+        <button id="aiBtn" disabled>Get AI Coaching</button>
+      </div>
+
+      <div class="big-text-box ai-box" id="aiCoach">
+        Run the analysis first, then click “Get AI Coaching.”
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
