@@ -379,15 +379,27 @@ aiBtn.addEventListener("click", async () => {
     });
 
     const rawText = await res.text();
+    const contentType = res.headers.get("content-type") || "";
     let data;
 
     try {
+      if (!contentType.includes("application/json")) {
+        const isHtml = rawText.trim().toLowerCase().startsWith("<!doctype html");
+
+        throw new Error(
+          isHtml
+            ? "The AI coach API returned an HTML page instead of JSON. Start the app with npm run dev or deploy it with a working /api/coach route."
+            : `The AI coach API returned ${contentType || "an unknown content type"} instead of JSON.`
+        );
+      }
+
       data = JSON.parse(rawText);
-    } catch {
+    } catch (error) {
       throw new Error(
-        rawText.toLowerCase().includes("page could not be found")
+        error.message ||
+        (rawText.toLowerCase().includes("page could not be found")
           ? "The /api/coach route was not found on Vercel. Check that the folder is named api, then commit, push, and redeploy."
-          : `Backend returned non-JSON: ${rawText.slice(0, 80)}`
+          : `Backend returned non-JSON: ${rawText.slice(0, 80)}`)
       );
     }
 
