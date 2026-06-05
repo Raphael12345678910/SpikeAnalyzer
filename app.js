@@ -9,6 +9,7 @@ const overlayCanvas = document.getElementById("overlayCanvas");
 const ctx = overlayCanvas.getContext("2d");
 
 const analyzeBtn = document.getElementById("analyzeBtn");
+const markContactBtn = document.getElementById("markContactBtn");
 const resetBtn = document.getElementById("resetBtn");
 const aiBtn = document.getElementById("aiBtn");
 const aiCoach = document.getElementById("aiCoach");
@@ -35,6 +36,7 @@ let lastAnalyzed = null;
 let currentVideoUrl = null;
 let latestLandmarks = null;
 let analysisRunId = 0;
+let currentMetrics = null;
 
 const ANALYSIS_FPS = 24;
 const MIN_VISIBILITY = 0.45;
@@ -395,45 +397,14 @@ function analyzePoseFrames(usableFrames) {
   const processed = addVelocities(smoothFrames(usableFrames));
   const peakJump = [...processed].sort((a, b) => a.bodyCenterYSmooth - b.bodyCenterYSmooth)[0];
 
-  const minWrist = Math.min(...processed.map((f) => f.w.y));
-  const maxWrist = Math.max(...processed.map((f) => f.w.y));
   const minReach = Math.min(...processed.map((f) => f.reachHeightSmooth));
   const maxReach = Math.max(...processed.map((f) => f.reachHeightSmooth));
-  const minBody = Math.min(...processed.map((f) => f.bodyCenterYSmooth));
-  const maxBody = Math.max(...processed.map((f) => f.bodyCenterYSmooth));
-
-  const candidates = processed.filter((f) => (
-    f.reachHeightSmooth > 0 &&
-    f.elbowAngleSmooth > 105 &&
-    f.shoulderAngleSmooth > 85
-  ));
-
-  const pool = candidates.length >= 4 ? candidates : processed;
-
-  for (const frame of pool) {
-    const wristHigh = 1 - normalize(frame.w.y, minWrist, maxWrist);
-    const reachHigh = normalize(frame.reachHeightSmooth, minReach, maxReach);
-    const elbowExtended = normalize(frame.elbowAngleSmooth, 115, 175);
-    const shoulderRaised = normalize(frame.shoulderAngleSmooth, 95, 170);
-    const jumpHigh = 1 - normalize(frame.bodyCenterYSmooth, minBody, maxBody);
-
-    frame.contactScore =
-      wristHigh * 0.3 +
-      reachHigh * 0.22 +
-      elbowExtended * 0.24 +
-      shoulderRaised * 0.14 +
-      jumpHigh * 0.1;
-  }
-
-  const contact = [...pool].sort((a, b) => b.contactScore - a.contactScore)[0];
-  const deltaFromPeak = contact.t - peakJump.t;
-  const reachPercent = maxReach > 0 ? clamp(contact.reachHeightSmooth / maxReach, 0, 1) : null;
   const visibilityAvg = processed.reduce((sum, f) => sum + f.visibility, 0) / processed.length;
   const confidenceScore = clamp(
     visibilityAvg * 0.45 +
-      (pool.length / processed.length) * 0.15 +
-      contact.contactScore * 0.3 +
-      (cameraAngleInput.value === "side" ? 0.1 : 0.04),
+      (processed.length >= 24 ? 0.2 : 0.1) +
+      (cameraAngleInput.value === "side" ? 0.2 : 0.08) +
+      normalize(maxReach - minReach, 0.05, 0.25) * 0.15,
     0,
     1
   );
@@ -448,32 +419,13 @@ function analyzePoseFrames(usableFrames) {
     warnings.push("some landmarks had low visibility, so the estimate may be noisy");
   }
 
-  if (deltaFromPeak > 0.12) {
-    warnings.push("likely contact frame is after jump peak, so the athlete may be contacting while descending");
-  } else if (deltaFromPeak < -0.12) {
-    warnings.push("likely contact frame is before jump peak, so the athlete may be contacting before full jump height");
-  }
-
-  if (contact.elbowAngleSmooth < 150) {
-    warnings.push("hitting elbow is not fully extended near the likely contact frame");
-  }
-
-  if (contact.shoulderAngleSmooth < 130) {
-    warnings.push("hitting arm is not reaching high enough above the shoulder near the likely contact frame");
-  }
-
-  warnings.push("no ball tracking yet, so contact timing is inferred from body position");
+  warnings.push("no ball tracking yet, so automatic analysis uses peak jump as the review frame");
+  warnings.push("mark the real ball-contact frame manually before using contact timing feedback");
 
   return {
     processed,
-    contact,
     peakJump,
-    deltaFromPeak,
-    reachPercent,
-    timing: timingLabel(deltaFromPeak),
-    timingScore: timingScore(deltaFromPeak),
-    extensionScore: extensionScore(contact.elbowAngleSmooth),
-    reachEfficiencyScore: reachPercent === null ? null : clamp(Math.round(reachPercent * 10), 1, 10),
+    maxReach,
     confidenceScore,
     confidenceLabel: confidenceLabel(confidenceScore),
     warnings
@@ -519,46 +471,143 @@ async function runDeterministicAnalysis(runId) {
   finishAnalysis();
 }
 
-function primaryAdvice(metrics) {
-  const { contact, deltaFromPeak, reachPercent } = metrics;
+function closestFrame(framesToSearch, time) {
+  return [...framesToSearch].sort((a, b) => Math.abs(a.t - time) - Math.abs(b.t - time))[0] || null;
+}
 
-  if (deltaFromPeak > 0.12) {
+function primaryAdvice(analysis) {
+  if (analysis.contactSource === "manual" && analysis.timeFromPeak > 0.12) {
     return {
-      issue: "You are probably contacting after your jump peak.",
-      cue: "Start your arm swing a little sooner so your hand is high as your body reaches its top point.",
-      drill: "Try toss-to-self spike reps where the goal is to freeze contact at the top of the jump, then compare the contact frame to the peak-jump frame."
+      issue: "Your marked contact is after your jump peak.",
+      cue: "Start the arm swing a little sooner so your hand is high as your body reaches its top point.",
+      drill: "Use approach reps where you pause at the marked contact frame and check whether it is moving closer to the peak-jump frame."
     };
   }
 
-  if (deltaFromPeak < -0.12) {
+  if (analysis.contactSource === "manual" && analysis.timeFromPeak < -0.12) {
     return {
-      issue: "You are probably reaching for the ball before your full jump height.",
-      cue: "Let the last two steps load the jump, then delay the arm strike until your torso has finished rising.",
-      drill: "Use approach-jump catches: catch the ball with your hitting hand as high as possible, focusing on waiting until the top."
+      issue: "Your marked contact is before your full jump height.",
+      cue: "Wait a fraction longer before the strike so your jump can finish rising.",
+      drill: "Use approach-jump catches: catch the ball with your hitting hand at your highest point before going back to full swings."
     };
   }
 
-  if (contact.elbowAngleSmooth < 150) {
+  if (analysis.elbowAngle < 150) {
     return {
-      issue: "Your hitting arm looks bent near the likely contact frame.",
+      issue: "Your hitting arm looks bent at the analysis frame.",
       cue: "Reach through the ball with a taller elbow and finish contact with your hand above and slightly in front of your hitting shoulder.",
       drill: "Do wall snaps from a high reach position, starting with a straight arm and snapping through without letting the elbow collapse."
     };
   }
 
-  if (reachPercent !== null && reachPercent < 0.9) {
+  if (analysis.reachPercent !== null && analysis.reachPercent < 90) {
     return {
-      issue: "You are not using your best available reach at the likely contact frame.",
+      issue: "You are not using your best available reach at the analysis frame.",
       cue: "Drive up first, then swing through a high contact point instead of letting the hand drop into the ball.",
       drill: "Mark your highest wrist point from the video and repeat approach jumps trying to match that height at contact."
     };
   }
 
   return {
-    issue: "Your timing and extension look reasonably coordinated in this clip.",
+    issue: "Your peak-jump position and arm extension look reasonably coordinated in this clip.",
     cue: "Keep chasing a high, fully extended contact while making the approach rhythm repeatable.",
-    drill: "Alternate full-speed reps with one controlled rep where you pause the video and check that contact is near jump peak."
+    drill: "Alternate full-speed reps with one controlled rep where you pause the video at peak jump and then at true contact."
   };
+}
+
+function buildAnalysisForFrame(frame, metrics, contactSource) {
+  const timeFromPeak = contactSource === "manual" ? frame.t - metrics.peakJump.t : null;
+  const reachRatio = metrics.maxReach > 0 ? clamp(frame.reachHeightSmooth / metrics.maxReach, 0, 1) : null;
+  const timing = contactSource === "manual" ? timingLabel(timeFromPeak) : "Not marked";
+  const warnings = [...metrics.warnings];
+
+  if (contactSource === "manual") {
+    if (timeFromPeak > 0.12) {
+      warnings.push("marked contact is after peak jump, so the athlete may be contacting while descending");
+    } else if (timeFromPeak < -0.12) {
+      warnings.push("marked contact is before peak jump, so the athlete may be contacting before full jump height");
+    }
+  }
+
+  if (frame.elbowAngleSmooth < 150) {
+    warnings.push("hitting elbow is not fully extended at the analysis frame");
+  }
+
+  if (frame.shoulderAngleSmooth < 130) {
+    warnings.push("hitting arm is not reaching high enough above the shoulder at the analysis frame");
+  }
+
+  const analysis = {
+    analysisFrameTime: round2(frame.t),
+    analysisFrameLabel: contactSource === "manual" ? "Manual contact frame" : "Peak jump frame",
+    contactSource,
+    elbowAngle: round1(frame.elbowAngleSmooth),
+    shoulderAngle: round1(frame.shoulderAngleSmooth),
+    extensionScore: extensionScore(frame.elbowAngleSmooth),
+    reachEfficiencyScore: reachRatio === null ? null : clamp(Math.round(reachRatio * 10), 1, 10),
+    timingScore: contactSource === "manual" ? timingScore(timeFromPeak) : null,
+    timing,
+    markedContactTime: contactSource === "manual" ? round2(frame.t) : null,
+    peakJumpTime: round2(metrics.peakJump.t),
+    timeFromPeak: contactSource === "manual" ? round2(timeFromPeak) : null,
+    reachPercent: reachRatio === null ? null : pct(reachRatio),
+    confidence: metrics.confidenceLabel,
+    confidenceScore: pct(metrics.confidenceScore),
+    warnings
+  };
+
+  const advice = primaryAdvice(analysis);
+
+  return {
+    ...analysis,
+    primaryIssue: advice.issue,
+    cue: advice.cue,
+    drill: advice.drill
+  };
+}
+
+function updateResults(analysis) {
+  angleValue.textContent = round1(analysis.elbowAngle) + "°";
+  extensionValue.textContent = analysis.extensionScore + "/10";
+  reachEfficiencyValue.textContent = analysis.reachEfficiencyScore + "/10";
+  contactReachValue.textContent =
+    analysis.contactSource === "manual"
+      ? `${analysis.timing} (${formatSignedSeconds(analysis.timeFromPeak)} from peak)`
+      : "Mark contact frame";
+  gainValue.textContent =
+    analysis.reachPercent === null ? "Unknown" : `${analysis.reachPercent}% of best reach`;
+  netMarginValue.textContent =
+    `${analysis.confidence} (${analysis.confidenceScore}%)`;
+
+  const warningLines = analysis.warnings.map((warning) => `- ${warning}`).join("\n");
+  const contactLine =
+    analysis.contactSource === "manual"
+      ? `Marked contact frame: ${analysis.markedContactTime}s\n`
+      : "Contact frame: not marked\n";
+
+  systemOutput.textContent =
+    "Analysis complete\n" +
+    `Analysis frame: ${analysis.analysisFrameLabel} at ${analysis.analysisFrameTime}s\n` +
+    contactLine +
+    `Peak jump frame: ${analysis.peakJumpTime}s\n` +
+    `Timing: ${analysis.timing}\n` +
+    `Main takeaway: ${analysis.primaryIssue}\n` +
+    `Cue: ${analysis.cue}\n\n` +
+    "Warnings:\n" + warningLines;
+}
+
+function seekToAnalysisFrame(frame) {
+  const handleSeek = () => {
+    drawFrame(frame.lm);
+    video.removeEventListener("seeked", handleSeek);
+  };
+
+  if (Math.abs(video.currentTime - frame.t) < 0.002) {
+    drawFrame(frame.lm);
+  } else {
+    video.addEventListener("seeked", handleSeek);
+    video.currentTime = frame.t;
+  }
 }
 
 function drawFrame(landmarks) {
@@ -647,63 +696,14 @@ function finishAnalysis() {
   }
 
   const metrics = analyzePoseFrames(usableFrames);
-  const { contact, peakJump, deltaFromPeak, reachPercent, warnings } = metrics;
-  const advice = primaryAdvice(metrics);
-
-  angleValue.textContent = round1(contact.elbowAngleSmooth) + "°";
-  extensionValue.textContent = metrics.extensionScore + "/10";
-  reachEfficiencyValue.textContent = metrics.reachEfficiencyScore + "/10";
-
-  contactReachValue.textContent =
-    `${metrics.timing} (${formatSignedSeconds(deltaFromPeak)} from peak)`;
-  gainValue.textContent =
-    reachPercent === null ? "Unknown" : `${pct(reachPercent)}% of best reach`;
-  netMarginValue.textContent =
-    `${metrics.confidenceLabel} (${pct(metrics.confidenceScore)}%)`;
-
-  const warningLines = warnings.map((warning) => `- ${warning}`).join("\n");
-
-  systemOutput.textContent =
-    "Analysis complete\n" +
-    "Likely contact frame: " + round2(contact.t) + "s\n" +
-    "Peak jump frame: " + round2(peakJump.t) + "s\n" +
-    "Timing: " + metrics.timing + " (" + formatSignedSeconds(deltaFromPeak) + " from peak jump)\n" +
-    "Main takeaway: " + advice.issue + "\n" +
-    "Cue: " + advice.cue + "\n\n" +
-    "Warnings:\n" + warningLines;
-
-  lastAnalyzed = {
-    elbowAngle: round1(contact.elbowAngleSmooth),
-    shoulderAngle: round1(contact.shoulderAngleSmooth),
-    extensionScore: metrics.extensionScore,
-    reachEfficiencyScore: metrics.reachEfficiencyScore,
-    timingScore: metrics.timingScore,
-    timing: metrics.timing,
-    likelyContactTime: round2(contact.t),
-    peakJumpTime: round2(peakJump.t),
-    timeFromPeak: round2(deltaFromPeak),
-    reachPercent: reachPercent === null ? null : pct(reachPercent),
-    confidence: metrics.confidenceLabel,
-    confidenceScore: pct(metrics.confidenceScore),
-    primaryIssue: advice.issue,
-    cue: advice.cue,
-    drill: advice.drill,
-    warnings
-  };
+  currentMetrics = metrics;
+  lastAnalyzed = buildAnalysisForFrame(metrics.peakJump, metrics, "peak");
+  updateResults(lastAnalyzed);
 
   aiBtn.disabled = false;
+  markContactBtn.disabled = false;
 
-  const handleSeek = () => {
-    drawFrame(contact.lm);
-    video.removeEventListener("seeked", handleSeek);
-  };
-
-  if (Math.abs(video.currentTime - contact.t) < 0.002) {
-    drawFrame(contact.lm);
-  } else {
-    video.addEventListener("seeked", handleSeek);
-    video.currentTime = contact.t;
-  }
+  seekToAnalysisFrame(metrics.peakJump);
 }
 
 function resetUI() {
@@ -716,12 +716,14 @@ function resetUI() {
   systemOutput.textContent = "No analysis yet.";
   aiCoach.textContent = "Run the analysis first, then click “Get AI Coaching.”";
   aiBtn.disabled = true;
+  markContactBtn.disabled = true;
 
   isAnalyzing = false;
   analysisRunId += 1;
 
   frames = [];
   lastAnalyzed = null;
+  currentMetrics = null;
   latestLandmarks = null;
 
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
@@ -761,6 +763,15 @@ resetBtn.addEventListener("click", () => {
   resetUI();
 });
 
+video.addEventListener("seeked", () => {
+  if (isAnalyzing || !currentMetrics?.processed?.length) return;
+
+  const frame = closestFrame(currentMetrics.processed, video.currentTime);
+  if (frame) {
+    drawFrame(frame.lm);
+  }
+});
+
 analyzeBtn.addEventListener("click", async () => {
   if (!video.src) {
     systemOutput.textContent = "Upload a video first.";
@@ -775,7 +786,9 @@ analyzeBtn.addEventListener("click", async () => {
   frames = [];
   latestLandmarks = null;
   lastAnalyzed = null;
+  currentMetrics = null;
   aiBtn.disabled = true;
+  markContactBtn.disabled = true;
   aiCoach.textContent = "Run the analysis first, then click “Get AI Coaching.”";
 
   resizeCanvasToVideoBox();
@@ -796,6 +809,48 @@ analyzeBtn.addEventListener("click", async () => {
     systemOutput.textContent = `Could not analyze the video: ${error.message}`;
   }
 });
+
+markContactBtn.addEventListener("click", () => {
+  if (!currentMetrics || !currentMetrics.processed.length) {
+    systemOutput.textContent = "Run analysis first, then scrub to contact and mark it.";
+    return;
+  }
+
+  const markedFrame = closestFrame(currentMetrics.processed, video.currentTime);
+
+  if (!markedFrame) {
+    systemOutput.textContent = "Could not match the current video time to an analyzed frame.";
+    return;
+  }
+
+  lastAnalyzed = buildAnalysisForFrame(markedFrame, currentMetrics, "manual");
+  updateResults(lastAnalyzed);
+  drawFrame(markedFrame.lm);
+});
+
+function buildBrowserCoachFeedback(analysis, note) {
+  const timingLine =
+    analysis.contactSource === "manual"
+      ? `Your marked contact is ${formatSignedSeconds(analysis.timeFromPeak)} from peak jump, which is ${analysis.timing.toLowerCase()}.`
+      : "You have not marked the true ball-contact frame yet, so I am not making a contact-timing judgment.";
+
+  return `Biggest issue:
+${analysis.primaryIssue}
+
+Why it matters:
+${timingLine} The most useful feedback comes from comparing true contact with peak jump, then checking whether the hitting arm is long and high at that exact frame.
+
+What to change:
+- ${analysis.cue}
+- Mark the real ball-contact frame before judging early, late, or on-time contact.
+- Keep the hitting hand high and the elbow long through the ball.
+
+One drill:
+${analysis.drill}
+
+Confidence / limitations:
+${analysis.confidence} confidence (${analysis.confidenceScore}%). ${note} This is local fallback coaching, not an OpenAI response.`;
+}
 
 aiBtn.addEventListener("click", async () => {
   if (!lastAnalyzed) {
@@ -818,13 +873,16 @@ aiBtn.addEventListener("click", async () => {
         userNotes: userNotesInput.value || "",
         standingReach: standingReachInput.value || "",
         netHeight: netHeightInput.value || "",
+        analysisFrameLabel: lastAnalyzed.analysisFrameLabel,
+        analysisFrameTime: lastAnalyzed.analysisFrameTime,
+        contactSource: lastAnalyzed.contactSource,
         elbowAngle: lastAnalyzed.elbowAngle,
         shoulderAngle: lastAnalyzed.shoulderAngle,
         extensionScore: lastAnalyzed.extensionScore,
         reachEfficiencyScore: lastAnalyzed.reachEfficiencyScore,
         timingScore: lastAnalyzed.timingScore,
         timing: lastAnalyzed.timing,
-        likelyContactTime: lastAnalyzed.likelyContactTime,
+        markedContactTime: lastAnalyzed.markedContactTime,
         peakJumpTime: lastAnalyzed.peakJumpTime,
         timeFromPeak: lastAnalyzed.timeFromPeak,
         reachPercent: lastAnalyzed.reachPercent,
@@ -845,14 +903,17 @@ aiBtn.addEventListener("click", async () => {
       if (!contentType.includes("application/json")) {
         const isHtml = rawText.trim().toLowerCase().startsWith("<!doctype html");
 
-        throw new Error(
-          isHtml
-            ? "The AI coach API returned an HTML page instead of JSON. Start the app with npm run dev or deploy it with a working /api/coach route."
-            : `The AI coach API returned ${contentType || "an unknown content type"} instead of JSON.`
-        );
+        data = {
+          feedback: buildBrowserCoachFeedback(
+            lastAnalyzed,
+            isHtml
+              ? "The /api/coach route returned the app HTML instead of JSON. Run with npm run dev, or deploy to a host that supports the api/coach.js serverless route."
+              : `The /api/coach route returned ${contentType || "an unknown content type"} instead of JSON.`
+          )
+        };
+      } else {
+        data = JSON.parse(rawText);
       }
-
-      data = JSON.parse(rawText);
     } catch (error) {
       throw new Error(
         error.message ||
@@ -869,7 +930,10 @@ aiBtn.addEventListener("click", async () => {
     aiCoach.textContent = data.feedback || "No response.";
   } catch (err) {
     console.error(err);
-    aiCoach.textContent = `AI failed: ${err.message}`;
+    aiCoach.textContent = buildBrowserCoachFeedback(
+      lastAnalyzed,
+      `The coach backend request failed: ${err.message}`
+    );
   }
 });
 

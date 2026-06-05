@@ -5,7 +5,7 @@
 ![OpenAI](https://img.shields.io/badge/OpenAI-AI%20Coaching-111827?style=for-the-badge&logo=openai&logoColor=fff)
 ![Vercel](https://img.shields.io/badge/Vercel-Serverless%20API-000?style=for-the-badge&logo=vercel&logoColor=fff)
 
-SpikeCheck is a volleyball training web app that analyzes a player's hitting arm during a spike attempt. The app lets an athlete upload a side-view video, detects body landmarks with MediaPipe, estimates the likely contact frame, compares it with the jump peak, calculates arm-extension metrics, and sends the interpreted results to a coaching endpoint for clear, practical feedback.
+SpikeCheck is a volleyball training web app that analyzes a player's hitting arm during a spike attempt. The app lets an athlete upload a side-view video, detects body landmarks with MediaPipe, finds the peak jump frame, lets the athlete manually mark true ball contact, calculates arm-extension metrics, and sends the interpreted results to a coaching endpoint for clear, practical feedback.
 
 This project was built to explore how computer vision and generative AI can make sports feedback more accessible. Instead of requiring expensive motion-capture equipment or a private coach for every rep, SpikeCheck turns a normal phone video into a focused technical breakdown.
 
@@ -27,17 +27,16 @@ Players can upload a local volleyball clip directly in the browser. The app disp
 
 SpikeCheck uses MediaPipe's Pose Landmarker model to identify the shoulder, elbow, and wrist of the selected hitting arm. It samples fixed video timestamps and stores the arm and body position over time.
 
-### Contact Frame Estimate
+### Peak Jump and Contact Marking
 
-Because the app does not currently track the ball, it estimates the likely contact moment using deterministic pose-based sampling and these signals:
+Because the app does not currently track the ball, it no longer pretends it can automatically know true contact timing. Instead, it finds the peak jump frame from body position and lets the user scrub to the actual ball-contact moment and mark that frame manually. It still uses:
 
-- high wrist position
-- wrist height relative to the shoulder
-- strong elbow extension
-- high shoulder reach angle
 - body center height near the jump peak
+- elbow extension at the selected analysis frame
+- shoulder reach angle at the selected analysis frame
+- marked contact time compared with peak jump, only when the user marks contact
 
-The app makes this limitation explicit in the interface so the user understands that the contact frame is an estimate.
+The app makes this limitation explicit in the interface so the user understands that contact timing is only valid after manual marking.
 
 ### Performance Metrics
 
@@ -45,12 +44,12 @@ SpikeCheck currently reports:
 
 | Metric | What It Means |
 | --- | --- |
-| Elbow angle at likely contact | Approximate angle between shoulder, elbow, and wrist near the estimated contact frame |
+| Elbow angle at analysis frame | Approximate angle between shoulder, elbow, and wrist at peak jump or the manually marked contact frame |
 | Arm extension score | A 1-10 score based on how extended the hitting arm is |
-| Reach efficiency score | A 1-10 estimate of how close the likely contact frame is to the player's best observed arm reach |
-| Jump timing at likely contact | Whether the likely contact frame is early, late, or near the peak of the jump |
-| Arm reach at likely contact | The likely contact reach as a percent of the best observed reach in the clip |
-| Analysis confidence | A rough confidence label based on pose visibility, camera angle, and contact-frame score |
+| Reach efficiency score | A 1-10 estimate of how close the analysis frame is to the player's best observed arm reach |
+| Contact timing | Whether the manually marked contact frame is early, late, or near the peak of the jump |
+| Arm reach at analysis frame | The analysis-frame reach as a percent of the best observed reach in the clip |
+| Analysis confidence | A rough confidence label based on pose visibility, camera angle, and sample quality |
 | System notes | Plain-language analysis status, warnings, and frame timing |
 
 Real-world reach, standing-reach gain, and net-margin estimates are intentionally not reported yet because the current prototype does not have reliable camera calibration or ball tracking.
@@ -88,11 +87,12 @@ The coaching prompt is designed to be practical and honest. It tells the model n
    - shoulder-elbow-wrist angle
    - wrist height relative to the shoulder
    - timestamp
-6. The app identifies a likely contact frame by combining wrist height, reach height, elbow extension, shoulder reach angle, and body height.
-7. The app identifies the jump peak from the smoothed body-center height.
-8. Results are shown in the UI with a practical takeaway and warnings.
-9. If requested, the results are sent to `/api/coach`.
-10. The API calls OpenAI when configured, or returns local fallback coaching when it is not.
+6. The app identifies the jump peak from the smoothed body-center height.
+7. Results are shown using the peak jump frame as the initial analysis frame.
+8. The user can scrub to true ball contact and click **Mark Contact Frame**.
+9. If contact is marked, the app compares marked contact timing with peak jump timing.
+10. If requested, the results are sent to `/api/coach`.
+11. The API calls OpenAI when configured, or returns local fallback coaching when it is not.
 
 ## Project Structure
 
@@ -180,8 +180,9 @@ In frontend-only mode, video analysis can still run, but AI coaching will not wo
 3. Upload the clip in SpikeCheck.
 4. Select hitting hand, camera angle, and rep type.
 5. Click **Analyze Video**.
-6. Review the measured results and system notes.
-7. Click **Get AI Coaching** for a written technical breakdown.
+6. Review the peak jump frame and system notes.
+7. Scrub to the true ball-contact moment and click **Mark Contact Frame** if you want contact timing feedback.
+8. Click **Get AI Coaching** for a written technical breakdown.
 
 ## Best Video Conditions
 
@@ -201,7 +202,8 @@ Pose estimation is less reliable when the athlete is partially blocked, too far 
 SpikeCheck is a prototype, so it is designed to be transparent about what it can and cannot measure.
 
 - It does not track the volleyball yet.
-- The contact frame is estimated from body position, not true ball contact.
+- It does not automatically detect true ball contact yet.
+- Contact timing feedback depends on the user manually marking the contact frame.
 - It does not calibrate real-world distance from pixels.
 - Real-world contact reach, standing-reach gain, and net-margin estimates are disabled until they can be made reliable.
 - It works best on side-view clips with one athlete.

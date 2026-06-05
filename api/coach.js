@@ -22,7 +22,9 @@ export default async function handler(req, res) {
 You are a clear, practical volleyball coach.
 
 Use the provided measurements as evidence, but do not pretend they are perfect.
-Do not invent exact ball-contact timing because the app does not track the ball yet.
+Do not invent ball-contact timing because the app does not track the ball yet.
+Only give early/on-time/late contact timing advice when Contact source is "manual".
+If Contact source is not "manual", base advice on peak-jump posture, arm extension, reach, and confidence limits.
 If a metric seems weak or limited, say so directly.
 
 Return exactly this format:
@@ -51,17 +53,19 @@ Player analysis data:
 - Rep type: ${analysis.repType}
 - User notes: ${analysis.userNotes || "none"}
 
-- Likely contact time: ${analysis.likelyContactTime}s
+- Analysis frame: ${analysis.analysisFrameLabel} at ${analysis.analysisFrameTime}s
+- Contact source: ${analysis.contactSource}
+- Marked contact time: ${analysis.markedContactTime}
 - Peak jump time: ${analysis.peakJumpTime}s
 - Contact timing relative to peak jump: ${analysis.timeFromPeak}s
 - Timing category: ${analysis.timing}
 - Timing score: ${analysis.timingScore}/10
 
-- Elbow angle near likely contact: ${analysis.elbowAngle} degrees
-- Shoulder reach angle near likely contact: ${analysis.shoulderAngle} degrees
+- Elbow angle at analysis frame: ${analysis.elbowAngle} degrees
+- Shoulder reach angle at analysis frame: ${analysis.shoulderAngle} degrees
 - Extension score: ${analysis.extensionScore}/10
 - Reach efficiency score: ${analysis.reachEfficiencyScore}/10
-- Arm reach at likely contact: ${analysis.reachPercent}% of best observed reach
+- Arm reach at analysis frame: ${analysis.reachPercent}% of best observed reach
 
 - Initial analyzer takeaway: ${analysis.primaryIssue}
 - Initial analyzer cue: ${analysis.cue}
@@ -103,21 +107,24 @@ function normalizeAnalysis(body) {
     userNotes: clean(body.userNotes, ""),
     standingReach: clean(body.standingReach, ""),
     netHeight: clean(body.netHeight, ""),
+    analysisFrameLabel: clean(body.analysisFrameLabel, "unknown"),
+    analysisFrameTime: numberOrUnknown(body.analysisFrameTime),
+    contactSource: clean(body.contactSource, "peak"),
     elbowAngle: numberOrUnknown(body.elbowAngle),
     shoulderAngle: numberOrUnknown(body.shoulderAngle),
     extensionScore: numberOrUnknown(body.extensionScore),
     reachEfficiencyScore: numberOrUnknown(body.reachEfficiencyScore),
     timingScore: numberOrUnknown(body.timingScore),
     timing: clean(body.timing, "unknown"),
-    likelyContactTime: numberOrUnknown(body.likelyContactTime),
+    markedContactTime: numberOrUnknown(body.markedContactTime),
     peakJumpTime: numberOrUnknown(body.peakJumpTime),
     timeFromPeak: numberOrUnknown(body.timeFromPeak),
     reachPercent: numberOrUnknown(body.reachPercent),
     confidence: clean(body.confidence, "unknown"),
     confidenceScore: numberOrUnknown(body.confidenceScore),
-    primaryIssue: clean(body.primaryIssue, "The likely contact frame needs review."),
+    primaryIssue: clean(body.primaryIssue, "The analysis frame needs review."),
     cue: clean(body.cue, "Reach high and keep the timing close to the top of the jump."),
-    drill: clean(body.drill, "Use controlled approach reps and pause the video at the likely contact frame."),
+    drill: clean(body.drill, "Use controlled approach reps and pause the video at peak jump and true contact."),
     warnings: Array.isArray(body.warnings) ? body.warnings.filter(Boolean).map(String) : []
   };
 }
@@ -129,6 +136,10 @@ function clean(value, fallback) {
 }
 
 function numberOrUnknown(value) {
+  if (value === null || value === undefined || value === "") {
+    return "unknown";
+  }
+
   const number = Number(value);
   return Number.isFinite(number) ? number : "unknown";
 }
@@ -153,41 +164,43 @@ One drill:
 ${drill}
 
 Confidence / limitations:
-${analysis.confidence} confidence (${analysis.confidenceScore}%). ${note} The app still does not track the ball, so treat the contact frame as a body-position estimate. Warnings: ${analysis.warnings.join("; ") || "none"}.`;
+${analysis.confidence} confidence (${analysis.confidenceScore}%). ${note} The app still does not track the ball, so contact timing is only valid when the user manually marks the true ball-contact frame. Warnings: ${analysis.warnings.join("; ") || "none"}.`;
 }
 
 function chooseIssue(analysis) {
-  if (analysis.timing === "Late" || Number(analysis.timeFromPeak) > 0.12) {
+  if (analysis.contactSource === "manual" && (analysis.timing === "Late" || Number(analysis.timeFromPeak) > 0.12)) {
     return {
       kind: "late",
-      text: `Your likely contact is ${analysis.timeFromPeak}s after peak jump, so you may be hitting while starting to descend.`
+      text: `Your marked contact is ${analysis.timeFromPeak}s after peak jump, so you may be hitting while starting to descend.`
     };
   }
 
-  if (analysis.timing === "Early" || Number(analysis.timeFromPeak) < -0.12) {
+  if (analysis.contactSource === "manual" && (analysis.timing === "Early" || Number(analysis.timeFromPeak) < -0.12)) {
     return {
       kind: "early",
-      text: `Your likely contact is ${analysis.timeFromPeak}s before peak jump, so you may be reaching for the ball before your full height.`
+      text: `Your marked contact is ${analysis.timeFromPeak}s before peak jump, so you may be reaching for the ball before your full height.`
     };
   }
 
   if (Number(analysis.extensionScore) < 7 || Number(analysis.elbowAngle) < 150) {
     return {
       kind: "bent",
-      text: `Your elbow angle near likely contact is ${analysis.elbowAngle} degrees, which suggests your hitting arm is not fully extended.`
+      text: `Your elbow angle at the analysis frame is ${analysis.elbowAngle} degrees, which suggests your hitting arm is not fully extended.`
     };
   }
 
   if (Number(analysis.reachEfficiencyScore) < 8) {
     return {
       kind: "reach",
-      text: `Your contact reach is about ${analysis.reachPercent}% of your best observed reach in this clip, so you are leaving height unused.`
+      text: `Your analysis-frame reach is about ${analysis.reachPercent}% of your best observed reach in this clip, so you may be leaving height unused.`
     };
   }
 
   return {
     kind: "solid",
-    text: "Your timing and extension look reasonably coordinated in this clip; the next step is making that high-contact pattern repeatable."
+    text: analysis.contactSource === "manual"
+      ? "Your marked contact timing and extension look reasonably coordinated in this clip; the next step is making that high-contact pattern repeatable."
+      : "Your peak-jump frame and arm extension look reasonably coordinated. Mark the true contact frame before judging contact timing."
   };
 }
 
