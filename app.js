@@ -1,7 +1,7 @@
 import {
   PoseLandmarker,
   FilesetResolver
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35";
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest";
 
 const video = document.getElementById("video");
 const videoInput = document.getElementById("videoInput");
@@ -39,13 +39,9 @@ let analysisRunId = 0;
 let currentMetrics = null;
 
 const ANALYSIS_FPS = 24;
-const METRIC_WINDOW_SECONDS = 0.1;
-const MIN_VISIBILITY = 0.55;
+const MIN_VISIBILITY = 0.45;
 
 const LM = {
-  nose: 0,
-  leftEar: 7,
-  rightEar: 8,
   leftShoulder: 11,
   rightShoulder: 12,
   leftElbow: 13,
@@ -86,20 +82,8 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-function round3(n) {
-  return Math.round(n * 1000) / 1000;
-}
-
 function pct(n) {
   return Math.round(n * 100);
-}
-
-function formatAngle(value) {
-  return Number.isFinite(value) ? `${round1(value)}°` : "--";
-}
-
-function formatScore(value) {
-  return Number.isFinite(value) ? `${value}/10` : "--";
 }
 
 function angle(a, b, c) {
@@ -148,29 +132,6 @@ function normalize(value, min, max) {
   return clamp((value - min) / (max - min), 0, 1);
 }
 
-function median(values) {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return null;
-
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[middle - 1] + sorted[middle]) / 2
-    : sorted[middle];
-}
-
-function percentile(values, p) {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return null;
-  if (sorted.length === 1) return sorted[0];
-
-  const index = clamp(p, 0, 1) * (sorted.length - 1);
-  const lower = Math.floor(index);
-  const upper = Math.ceil(index);
-  const weight = index - lower;
-
-  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
-}
-
 function formatSignedSeconds(seconds) {
   if (!Number.isFinite(seconds)) return "unknown";
   const sign = seconds > 0 ? "+" : "";
@@ -203,7 +164,6 @@ function jointSet(lm, hand) {
 
   const shoulderCenter = averagePoint([lm[LM.leftShoulder], lm[LM.rightShoulder]]);
   const hipCenter = averagePoint([lm[LM.leftHip], lm[LM.rightHip]]);
-  const headCenter = averagePoint([lm[LM.nose], lm[LM.leftEar], lm[LM.rightEar]]);
   const bodyCenter = averagePoint([shoulderCenter, hipCenter]);
   const ankleCenter = averagePoint([lm[LM.leftAnkle], lm[LM.rightAnkle]]);
   const kneeCenter = averagePoint([lm[LM.leftKnee], lm[LM.rightKnee]]);
@@ -215,7 +175,6 @@ function jointSet(lm, hand) {
     hip,
     shoulderCenter,
     hipCenter,
-    headCenter,
     bodyCenter,
     kneeCenter,
     ankleCenter
@@ -238,20 +197,13 @@ function buildFrame(t, lm, hand) {
   const reachHeight = armHeight(shoulder, wrist);
   const wristHeight = 1 - wrist.y;
   const bodyHeight = 1 - bodyCenter.y;
-  const hipHeight = 1 - hipCenter.y;
-  const shoulderHeight = 1 - shoulderCenter.y;
-  const headHeight = headCenter ? 1 - headCenter.y : null;
-  const jumpAnchorY = hipCenter.y * 0.7 + shoulderCenter.y * 0.3;
 
   if (
     !Number.isFinite(elbowAngle) ||
     !Number.isFinite(shoulderAngle) ||
     !Number.isFinite(reachHeight) ||
     !Number.isFinite(wristHeight) ||
-    !Number.isFinite(bodyHeight) ||
-    !Number.isFinite(hipHeight) ||
-    !Number.isFinite(shoulderHeight) ||
-    !Number.isFinite(jumpAnchorY)
+    !Number.isFinite(bodyHeight)
   ) {
     return null;
   }
@@ -268,13 +220,7 @@ function buildFrame(t, lm, hand) {
     h: reachHeight,
     wristHeight,
     bodyHeight,
-    hipHeight,
-    shoulderHeight,
-    headHeight,
-    hipCenterY: hipCenter.y,
-    shoulderCenterY: shoulderCenter.y,
     bodyCenterY: bodyCenter.y,
-    jumpAnchorY,
     visibility
   };
 }
@@ -287,9 +233,6 @@ function smoothFrames(inputFrames) {
     return {
       ...frame,
       bodyCenterYSmooth: avg("bodyCenterY"),
-      hipCenterYSmooth: avg("hipCenterY"),
-      shoulderCenterYSmooth: avg("shoulderCenterY"),
-      jumpAnchorYSmooth: avg("jumpAnchorY"),
       wristHeightSmooth: avg("wristHeight"),
       reachHeightSmooth: avg("h"),
       elbowAngleSmooth: avg("ang"),
@@ -440,11 +383,11 @@ function getSampleTimes(duration) {
   const times = [];
 
   for (let t = 0; t <= end; t += step) {
-    times.push(round3(t));
+    times.push(round2(t));
   }
 
   if (!times.length || times[times.length - 1] < end) {
-    times.push(round3(end));
+    times.push(round2(end));
   }
 
   return [...new Set(times)];
@@ -452,21 +395,16 @@ function getSampleTimes(duration) {
 
 function analyzePoseFrames(usableFrames) {
   const processed = addVelocities(smoothFrames(usableFrames));
-  const peakJump = [...processed].sort((a, b) => {
-    const jumpDiff = a.jumpAnchorYSmooth - b.jumpAnchorYSmooth;
-    if (Math.abs(jumpDiff) > 0.002) return jumpDiff;
-
-    return a.hipCenterYSmooth - b.hipCenterYSmooth;
-  })[0];
+  const peakJump = [...processed].sort((a, b) => a.bodyCenterYSmooth - b.bodyCenterYSmooth)[0];
 
   const minReach = Math.min(...processed.map((f) => f.reachHeightSmooth));
-  const bestReach = percentile(processed.map((f) => f.reachHeightSmooth), 0.95);
+  const maxReach = Math.max(...processed.map((f) => f.reachHeightSmooth));
   const visibilityAvg = processed.reduce((sum, f) => sum + f.visibility, 0) / processed.length;
   const confidenceScore = clamp(
     visibilityAvg * 0.45 +
       (processed.length >= 24 ? 0.2 : 0.1) +
       (cameraAngleInput.value === "side" ? 0.2 : 0.08) +
-      normalize((bestReach ?? minReach) - minReach, 0.05, 0.25) * 0.15,
+      normalize(maxReach - minReach, 0.05, 0.25) * 0.15,
     0,
     1
   );
@@ -483,12 +421,11 @@ function analyzePoseFrames(usableFrames) {
 
   warnings.push("no ball tracking yet, so automatic analysis uses peak jump as the review frame");
   warnings.push("mark the real ball-contact frame manually before using contact timing feedback");
-  warnings.push("peak jump is based on a smoothed waist/torso anchor, not foot height");
 
   return {
     processed,
     peakJump,
-    bestReach,
+    maxReach,
     confidenceScore,
     confidenceLabel: confidenceLabel(confidenceScore),
     warnings
@@ -499,6 +436,7 @@ async function runDeterministicAnalysis(runId) {
   await waitForMetadata();
 
   const sampleTimes = getSampleTimes(video.duration);
+  const timestampBase = performance.now();
 
   for (let i = 0; i < sampleTimes.length; i += 1) {
     if (!isAnalyzing || runId !== analysisRunId) return;
@@ -508,7 +446,7 @@ async function runDeterministicAnalysis(runId) {
 
     if (!isAnalyzing || runId !== analysisRunId) return;
 
-    const result = poseLandmarker.detect(video);
+    const result = poseLandmarker.detectForVideo(video, timestampBase + t * 1000);
 
     if (result.landmarks && result.landmarks.length > 0) {
       const lm = result.landmarks[0];
@@ -535,22 +473,6 @@ async function runDeterministicAnalysis(runId) {
 
 function closestFrame(framesToSearch, time) {
   return [...framesToSearch].sort((a, b) => Math.abs(a.t - time) - Math.abs(b.t - time))[0] || null;
-}
-
-function stableFrameMetrics(frame, metrics) {
-  const nearby = metrics.processed.filter((f) => (
-    Math.abs(f.t - frame.t) <= METRIC_WINDOW_SECONDS &&
-    f.visibility >= MIN_VISIBILITY
-  ));
-  const windowFrames = nearby.length >= 3 ? nearby : [frame];
-
-  return {
-    elbowAngle: median(windowFrames.map((f) => f.elbowAngleSmooth)),
-    shoulderAngle: median(windowFrames.map((f) => f.shoulderAngleSmooth)),
-    reachHeight: median(windowFrames.map((f) => f.reachHeightSmooth)),
-    visibility: median(windowFrames.map((f) => f.visibility)),
-    sampleCount: windowFrames.length
-  };
 }
 
 function primaryAdvice(analysis) {
@@ -595,8 +517,7 @@ function primaryAdvice(analysis) {
 
 function buildAnalysisForFrame(frame, metrics, contactSource) {
   const timeFromPeak = contactSource === "manual" ? frame.t - metrics.peakJump.t : null;
-  const stable = stableFrameMetrics(frame, metrics);
-  const reachRatio = metrics.bestReach > 0 ? clamp(stable.reachHeight / metrics.bestReach, 0, 1) : null;
+  const reachRatio = metrics.maxReach > 0 ? clamp(frame.reachHeightSmooth / metrics.maxReach, 0, 1) : null;
   const timing = contactSource === "manual" ? timingLabel(timeFromPeak) : "Not marked";
   const warnings = [...metrics.warnings];
 
@@ -608,25 +529,21 @@ function buildAnalysisForFrame(frame, metrics, contactSource) {
     }
   }
 
-  if (stable.elbowAngle < 150) {
+  if (frame.elbowAngleSmooth < 150) {
     warnings.push("hitting elbow is not fully extended at the analysis frame");
   }
 
-  if (stable.shoulderAngle < 130) {
+  if (frame.shoulderAngleSmooth < 130) {
     warnings.push("hitting arm is not reaching high enough above the shoulder at the analysis frame");
-  }
-
-  if (stable.sampleCount < 3) {
-    warnings.push("analysis-frame metrics came from a narrow sample window, so treat the scores cautiously");
   }
 
   const analysis = {
     analysisFrameTime: round2(frame.t),
     analysisFrameLabel: contactSource === "manual" ? "Manual contact frame" : "Peak jump frame",
     contactSource,
-    elbowAngle: round1(stable.elbowAngle),
-    shoulderAngle: round1(stable.shoulderAngle),
-    extensionScore: extensionScore(stable.elbowAngle),
+    elbowAngle: round1(frame.elbowAngleSmooth),
+    shoulderAngle: round1(frame.shoulderAngleSmooth),
+    extensionScore: extensionScore(frame.elbowAngleSmooth),
     reachEfficiencyScore: reachRatio === null ? null : clamp(Math.round(reachRatio * 10), 1, 10),
     timingScore: contactSource === "manual" ? timingScore(timeFromPeak) : null,
     timing,
@@ -650,9 +567,9 @@ function buildAnalysisForFrame(frame, metrics, contactSource) {
 }
 
 function updateResults(analysis) {
-  angleValue.textContent = formatAngle(analysis.elbowAngle);
-  extensionValue.textContent = formatScore(analysis.extensionScore);
-  reachEfficiencyValue.textContent = formatScore(analysis.reachEfficiencyScore);
+  angleValue.textContent = round1(analysis.elbowAngle) + "°";
+  extensionValue.textContent = analysis.extensionScore + "/10";
+  reachEfficiencyValue.textContent = analysis.reachEfficiencyScore + "/10";
   contactReachValue.textContent =
     analysis.contactSource === "manual"
       ? `${analysis.timing} (${formatSignedSeconds(analysis.timeFromPeak)} from peak)`
@@ -770,7 +687,6 @@ function finishAnalysis() {
     Number.isFinite(f.ang) &&
     Number.isFinite(f.h) &&
     Number.isFinite(f.bodyCenterY) &&
-    Number.isFinite(f.jumpAnchorY) &&
     Number.isFinite(f.shoulderAngle)
   ));
 
@@ -1023,19 +939,16 @@ aiBtn.addEventListener("click", async () => {
 
 async function init() {
   const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm"
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
   );
 
   poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
       modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
     },
-    runningMode: "IMAGE",
-    numPoses: 1,
-    minPoseDetectionConfidence: 0.6,
-    minPosePresenceConfidence: 0.6,
-    minTrackingConfidence: 0.6
+    runningMode: "VIDEO",
+    numPoses: 1
   });
 
   systemOutput.textContent = "Ready. Upload a clip, then click “Analyze Video.”";
