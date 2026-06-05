@@ -5,7 +5,7 @@
 ![OpenAI](https://img.shields.io/badge/OpenAI-AI%20Coaching-111827?style=for-the-badge&logo=openai&logoColor=fff)
 ![Vercel](https://img.shields.io/badge/Vercel-Serverless%20API-000?style=for-the-badge&logo=vercel&logoColor=fff)
 
-SpikeCheck is a volleyball training web app that analyzes a player's hitting arm during a spike attempt. The app lets an athlete upload a side-view video, detects body landmarks with MediaPipe, estimates the likely contact frame, calculates arm-extension metrics, and sends the results to an AI coaching endpoint for clear, practical feedback.
+SpikeCheck is a volleyball training web app that analyzes a player's hitting arm during a spike attempt. The app lets an athlete upload a side-view video, detects body landmarks with MediaPipe, estimates the likely contact frame, compares it with the jump peak, calculates arm-extension metrics, and sends the interpreted results to a coaching endpoint for clear, practical feedback.
 
 This project was built to explore how computer vision and generative AI can make sports feedback more accessible. Instead of requiring expensive motion-capture equipment or a private coach for every rep, SpikeCheck turns a normal phone video into a focused technical breakdown.
 
@@ -25,15 +25,17 @@ Players can upload a local volleyball clip directly in the browser. The app disp
 
 ### Pose-Based Arm Tracking
 
-SpikeCheck uses MediaPipe's Pose Landmarker model to identify the shoulder, elbow, and wrist of the selected hitting arm. It samples video frames during playback and stores the arm position over time.
+SpikeCheck uses MediaPipe's Pose Landmarker model to identify the shoulder, elbow, and wrist of the selected hitting arm. It samples fixed video timestamps and stores the arm and body position over time.
 
 ### Contact Frame Estimate
 
-Because the app does not currently track the ball, it estimates the likely contact moment using pose-based signals:
+Because the app does not currently track the ball, it estimates the likely contact moment using deterministic pose-based sampling and these signals:
 
-- high wrist position relative to the shoulder
-- strong arm extension
-- proximity to the peak reach frame
+- high wrist position
+- wrist height relative to the shoulder
+- strong elbow extension
+- high shoulder reach angle
+- body center height near the jump peak
 
 The app makes this limitation explicit in the interface so the user understands that the contact frame is an estimate.
 
@@ -45,14 +47,17 @@ SpikeCheck currently reports:
 | --- | --- |
 | Elbow angle at likely contact | Approximate angle between shoulder, elbow, and wrist near the estimated contact frame |
 | Arm extension score | A 1-10 score based on how extended the hitting arm is |
-| Reach efficiency score | A 1-10 estimate of how close the contact frame is to the player's peak reach |
+| Reach efficiency score | A 1-10 estimate of how close the likely contact frame is to the player's best observed arm reach |
+| Jump timing at likely contact | Whether the likely contact frame is early, late, or near the peak of the jump |
+| Arm reach at likely contact | The likely contact reach as a percent of the best observed reach in the clip |
+| Analysis confidence | A rough confidence label based on pose visibility, camera angle, and contact-frame score |
 | System notes | Plain-language analysis status, warnings, and frame timing |
 
-Some metrics, such as contact reach, gain above standing reach, and net margin, are intentionally disabled for now because the current prototype does not yet have reliable camera calibration or ball tracking.
+Real-world reach, standing-reach gain, and net-margin estimates are intentionally not reported yet because the current prototype does not have reliable camera calibration or ball tracking.
 
 ### AI Coaching
 
-After analysis, the app sends the measured results to a serverless API route. The API uses OpenAI to generate a coaching response with:
+After analysis, the app sends the interpreted results to a serverless API route. The API uses OpenAI when `OPENAI_API_KEY` is configured, and otherwise returns a local rule-based coaching fallback so the button still produces useful feedback during local testing. The coaching response includes:
 
 - the biggest technical issue
 - why it matters
@@ -77,16 +82,17 @@ The coaching prompt is designed to be practical and honest. It tells the model n
 
 1. The user uploads a video clip.
 2. The browser loads the video and prepares a canvas overlay.
-3. MediaPipe detects body landmarks frame by frame while the video plays.
+3. MediaPipe detects body landmarks at fixed timestamps so repeated runs sample the same frames.
 4. The app isolates the selected hitting arm based on the user's handedness.
 5. For each reliable frame, it calculates:
    - shoulder-elbow-wrist angle
    - wrist height relative to the shoulder
    - timestamp
-6. The app identifies a likely contact frame by combining reach height and extension.
-7. Results are shown in the UI.
-8. If requested, the results are sent to `/api/coach`.
-9. The API calls OpenAI and returns a structured coaching report.
+6. The app identifies a likely contact frame by combining wrist height, reach height, elbow extension, shoulder reach angle, and body height.
+7. The app identifies the jump peak from the smoothed body-center height.
+8. Results are shown in the UI with a practical takeaway and warnings.
+9. If requested, the results are sent to `/api/coach`.
+10. The API calls OpenAI when configured, or returns local fallback coaching when it is not.
 
 ## Project Structure
 
@@ -195,9 +201,9 @@ Pose estimation is less reliable when the athlete is partially blocked, too far 
 SpikeCheck is a prototype, so it is designed to be transparent about what it can and cannot measure.
 
 - It does not track the volleyball yet.
-- The contact frame is estimated from body position, not ball contact.
+- The contact frame is estimated from body position, not true ball contact.
 - It does not calibrate real-world distance from pixels.
-- Contact reach, standing-reach gain, and net-margin estimates are disabled until they can be made reliable.
+- Real-world contact reach, standing-reach gain, and net-margin estimates are disabled until they can be made reliable.
 - It works best on side-view clips with one athlete.
 - Pose detection accuracy depends on lighting, camera angle, and body visibility.
 
