@@ -25,13 +25,14 @@ Players can upload a local volleyball clip directly in the browser. The app disp
 
 ### Pose-Based Arm Tracking
 
-SpikeCheck uses MediaPipe's Pose Landmarker model to identify the shoulder, elbow, and wrist of the selected hitting arm. It samples fixed video timestamps and stores the arm and body position over time.
+SpikeCheck uses MediaPipe's Pose Landmarker model to identify the hitting shoulder, elbow, wrist, torso, and hips. It samples fixed video timestamps, runs per-frame pose detection, and stores the arm and torso position over time.
 
 ### Peak Jump and Contact Marking
 
 Because the app does not currently track the ball, it no longer pretends it can automatically know true contact timing. Instead, it finds the peak jump frame from body position and lets the user scrub to the actual ball-contact moment and mark that frame manually. It still uses:
 
 - body center height near the jump peak
+- smoothed waist/torso height, not foot height, to avoid false peaks when a player tucks their legs
 - elbow extension at the selected analysis frame
 - shoulder reach angle at the selected analysis frame
 - marked contact time compared with peak jump, only when the user marks contact
@@ -44,9 +45,9 @@ SpikeCheck currently reports:
 
 | Metric | What It Means |
 | --- | --- |
-| Elbow angle at analysis frame | Approximate angle between shoulder, elbow, and wrist at peak jump or the manually marked contact frame |
-| Arm extension score | A 1-10 score based on how extended the hitting arm is |
-| Reach efficiency score | A 1-10 estimate of how close the analysis frame is to the player's best observed arm reach |
+| Elbow angle at analysis frame | Approximate shoulder-elbow-wrist angle stabilized across nearby frames |
+| Arm extension score | A 1-10 score based on the stabilized elbow-extension estimate |
+| Reach efficiency score | A 1-10 estimate of how close the analysis frame is to the player's high-percentile observed arm reach |
 | Contact timing | Whether the manually marked contact frame is early, late, or near the peak of the jump |
 | Arm reach at analysis frame | The analysis-frame reach as a percent of the best observed reach in the clip |
 | Analysis confidence | A rough confidence label based on pose visibility, camera angle, and sample quality |
@@ -86,8 +87,9 @@ The coaching prompt is designed to be practical and honest. It tells the model n
 5. For each reliable frame, it calculates:
    - shoulder-elbow-wrist angle
    - wrist height relative to the shoulder
+   - smoothed waist/torso height for jump apex
    - timestamp
-6. The app identifies the jump peak from the smoothed body-center height.
+6. The app identifies the jump peak from smoothed hip/torso height, not foot height.
 7. Results are shown using the peak jump frame as the initial analysis frame.
 8. The user can scrub to true ball contact and click **Mark Contact Frame**.
 9. If contact is marked, the app compares marked contact timing with peak jump timing.
@@ -204,6 +206,7 @@ SpikeCheck is a prototype, so it is designed to be transparent about what it can
 - It does not track the volleyball yet.
 - It does not automatically detect true ball contact yet.
 - Contact timing feedback depends on the user manually marking the contact frame.
+- Elbow angle, reach efficiency, and arm-reach metrics are estimates from 2D pose landmarks, so blur, occlusion, camera angle, and loose clothing can still affect them.
 - It does not calibrate real-world distance from pixels.
 - Real-world contact reach, standing-reach gain, and net-margin estimates are disabled until they can be made reliable.
 - It works best on side-view clips with one athlete.
